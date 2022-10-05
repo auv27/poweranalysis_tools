@@ -1,0 +1,236 @@
+---
+title: "lant_gbtminfantdyads_poweranalysis_05202022"
+author: "Alicia Vallorani"
+date: "5/20/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if (!("pacman" %in% installed.packages()[,])) {
+    install.packages("pacman")
+  }
+pacman::p_load(tidyverse, lavaan, lmerTest, broom.mixed, lcmm, paramtest)
+
+set.seed(1234)
+```
+
+
+# Monte-Carlo Simulation GBTM
+## Creating 2000 dataframes
+278 infants provided at least one overlap value
+```{r}
+cormat <- lavaan::getCov(
+'1.0									
+0.13	1.0								
+0.29	0.32	1.0							
+-0.14	0.13	-0.1	1.0						
+0.31	-0.23	-0.16	-0.04	1.0					
+0.43	0.24	0.07	-0.15	0.17	1.0				
+0.22	0.47	0.25	0.2	-0.29	0.28	1.0			
+0.13	0.17	0.47	-0.06	0	0.13	-0.03	1.0		
+0.07	0.06	-0.08	0.52	-0.01	-0.04	0	-0.06	1.0	
+0.3	-0.43	0.01	0.1	0.53	0.28	-0.27	-0.05	0.15	1.0
+', names=c("a_1", "a_2", "a_3", "a_4", "a_5",
+           "h_1", "h_2", "h_3", "h_4", "h_5"))
+
+sds <- c(a_1 = .49, a_2 = .48, a_3 = .46, a_4 = .37, a_5 = .30,
+         h_1 = .46, h_2 = .46, h_3 = .30, h_4 = .37, h_5 = .41)
+means <- c(a_1 = 0, a_2 = 0, a_3 = 0, a_4 = 0, a_5 = 0,
+           h_1 = 0, h_2 = 0, h_3 = 0, h_4 = 0, h_5 = 0)
+covmat <- lavaan::cor2cov(cormat, sds)
+
+nreps <- 2000
+n <- 278
+all_data <- lapply(1:nreps, function(x) {
+  
+  ages <- data_frame(age_1 = runif(278, 3, 7),
+                     age_2 = runif(278, 7, 10),
+                     age_3 = runif(278, 11, 14),
+                     age_4 = runif(278, 16, 22),
+                     age_5 = runif(278, 23, 30),
+                     id = as.numeric(rep(1:278))) %>%
+  pivot_longer(1:5, names_to = "visit", values_to = "age") %>%
+  separate(visit, c("x", "visit")) %>%
+  dplyr::select(-x)
+  
+  MASS::mvrnorm(n, mu=means, Sigma = covmat, empirical=TRUE) %>% 
+  data.frame() %>%
+  mutate(id = as.numeric(rep(1:n)),
+         re_int = rnorm(n, sd = .75),
+         re_slope = rnorm(n, sd = .25)) %>%
+  pivot_longer(1:10, names_to = "emotion", values_to = "attn") %>%
+  separate(emotion, c("emo", "visit")) %>%
+  left_join(., ages) %>%
+  mutate(e = rnorm(n*10, sd = .25),
+         attn = attn + re_int[id] + (.5 + re_slope[id]) * age + e)
+})
+```
+
+
+## Estimating power for Linear 2G solution
+```{r}
+all_est <- lapply(all_data, function(df) {
+  m <- hlme(attn ~age*emo,
+            random = ~age*emo, subject = "id",
+            mixture = ~age*emo,
+            ng = 2, idiag = TRUE, data = df)
+  return(as.data.frame(summary(m)) %>% rownames_to_column())
+})
+
+# age x class
+all_df <- bind_rows(all_est) %>% filter(rowname=="age class1" | rowname=="age class2") %>% rename(p.value = "p-value") %>% na.omit() 
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x class is: ", power, "\n\n")
+
+# emoh x class
+all_df <- bind_rows(all_est) %>% filter(rowname=="emoh class1" | rowname=="emoh class2") %>% rename(p.value = "p-value") %>% na.omit() 
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for emoh x class is: ", power, "\n\n")
+
+# age x emoh x class
+all_df <- bind_rows(all_est) %>% filter(rowname=="age:emoh class1" | rowname=="age:emoh class2") %>% rename(p.value = "p-value") %>% na.omit() 
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x emoh x class is: ", power, "\n\n")
+```
+
+
+## Estimating power for Linear 3G solution
+```{r}
+#now estimate the model of interest in all datasets
+all_est <- lapply(all_data, function(df) {
+  #standardize data to retain correlation estimate
+  #df <- df %>% mutate_all(scale)
+  m <- hlme(attn ~age*emo,
+            random = ~age*emo, subject = "id",
+            mixture = ~age*emo,
+            ng = 3, idiag = TRUE, data = df)
+  return(as.data.frame(summary(m)) %>% rownames_to_column())
+})
+
+# age x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="age class1" | rowname=="age class2" | rowname=="age class3") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x class is: ", power, "\n\n")
+
+# emoh x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="emoh class1" | rowname=="emoh class2" | rowname=="emoh class3") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for emoh x class is: ", power, "\n\n")
+
+# age x emoh x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="age:emoh class1" | 
+         rowname=="age:emoh class2" | 
+         rowname=="age:emoh class3") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x emoh x class is: ", power, "\n\n")
+```
+
+
+## Estimating power for Linear 4G solution
+```{r}
+#now estimate the model of interest in all datasets
+all_est <- lapply(all_data, function(df) {
+  m <- hlme(attn ~age*emo,
+            random = ~age*emo, subject = "id",
+            mixture = ~age*emo,
+            ng = 4, idiag = TRUE, data = df)
+  return(as.data.frame(summary(m)) %>% rownames_to_column())
+})
+
+# age x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="age class1" | rowname=="age class2" | 
+         rowname=="age class3" | rowname=="age class3") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x class is: ", power, "\n\n")
+
+# emoh x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="emoh class1" | rowname=="emoh class2" | 
+         rowname=="emoh class3" | rowname=="emoh class4") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for emoh x class is: ", power, "\n\n")
+
+# age x emoh x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="age:emoh class1" | 
+         rowname=="age:emoh class2" | 
+         rowname=="age:emoh class3" |
+         rowname=="age:emoh class4") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x emoh x class is: ", power, "\n\n")
+```
+
+
+## Estimating power for Quadratic 2G solution
+```{r}
+#now estimate the model of interest in all datasets
+all_est <- lapply(all_data, function(df) {
+  #standardize data to retain correlation estimate
+  #df <- df %>% mutate_all(scale)
+  m <- hlme(attn ~age + I(age^2)*emo,
+            random = ~age + I(age^2)*emo, subject = "id",
+            mixture = ~age + I(age^2)*emo,
+            ng = 2, idiag = TRUE, data = df)
+  return(as.data.frame(summary(m)) %>% rownames_to_column())
+})
+
+all_est[[1]] -> df1
+
+# age x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="I(age^2) class1" | 
+         rowname=="I(age^2) class2") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x class is: ", power, "\n\n")
+
+# emoh x class
+all_df <- bind_rows(all_est) %>% filter(rowname=="emoh class1" | rowname=="emoh class2") %>% rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for emoh x class is: ", power, "\n\n")
+
+# age x emoh x class
+all_df <- bind_rows(all_est) %>% 
+  filter(rowname=="I(age^2):emoh class1" | 
+         rowname=="I(age^2):emoh class2") %>% 
+  rename(p.value = "p-value") %>% na.omit() #just the regression coefficient of interest
+
+alpha <- .05
+power <- sum(all_df$p.value < alpha)/nrow(all_df)
+cat("Calculated power for age x emoh x class is: ", power, "\n\n")
+```
